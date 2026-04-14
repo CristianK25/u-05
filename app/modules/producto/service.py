@@ -9,16 +9,48 @@ from app.modules.producto.unit_of_work import ProductoUnitOfWork
 
 class ProductoService:
     """
-    Capa de lógica de negocio para Producto.
-    Acá se realizan todas las operaciones sobre los productos sin tocar
-    la base de datos de manera explícita (para eso usa el UoW).
+    Capa de lógica de negocio para Productos.
+
+    Responsabilidades:
+    - Coordinar repositorios a través del UoW
+    - Levantar HTTPException cuando corresponde
+    - NUNCA acceder directamente a la Session
+
+    REGLA IMPORTANTE — objetos ORM y commit():
+    Después de que el UoW hace commit(), SQLAlchemy expira los atributos
+    del objeto ORM. Toda serialización (model_dump / model_validate)
+    debe ocurrir DENTRO del bloque `with uow:`, antes de que __exit__
+    dispare el commit.
     """
 
     def __init__(self, session: Session) -> None:
+        """
+        Inicializa el servicio con una sesión de base de datos.
+
+        Args:
+            session (Session): Sesión activa que será utilizada por el UnitOfWork.
+
+        Nota:
+            El servicio no maneja directamente la transacción; delega en ProductoUnitOfWork.
+        """
         self._session = session
 
+    # ── Helpers privados ──────────────────────────────────────────────────────
+
     def _get_or_404(self, uow: ProductoUnitOfWork, producto_id: int) -> Producto:
-        """Helper privado para levantar el error 404 si el producto no existe."""
+        """
+        Obtiene un producto por ID o lanza excepción HTTP 404 si no existe.
+
+        Args:
+            uow (ProductoUnitOfWork): Unidad de trabajo activa.
+            producto_id (int): ID del producto.
+
+        Returns:
+            Producto: Instancia encontrada.
+
+        Raises:
+            HTTPException: 404 si el producto no existe.
+        """
         producto = uow.productos.get_by_id(producto_id)
         if not producto:
             raise HTTPException(
@@ -27,36 +59,70 @@ class ProductoService:
             )
         return producto
 
+    # ── Casos de uso ─────────────────────────────────────────────────────────
+
     def create(self, data: ProductoCreate) -> ProductoPublic:
-        """Crea un nuevo producto en el sistema."""
+        """
+        Crea un nuevo producto.
+
+        Flujo:
+        - Construye entidad desde DTO
+        - Persiste usando repositorio
+        - Serializa antes de cerrar la transacción
+
+        Args:
+            data (ProductoCreate): Datos de entrada.
+
+        Returns:
+            ProductoPublic: DTO de salida.
+        """
         with ProductoUnitOfWork(self._session) as uow:
-            # Transformamos el Schema de entrada al Model de base de datos
             producto = Producto.model_validate(data)
-            
-            # Lo persistimos (hace flush, obtiene su ID generado)
             uow.productos.add(producto)
-            
-            # Formateamos al Schema de salida DENTRO del with para evitar errores de expiración ORM
             result = ProductoPublic.model_validate(producto)
-            
+
         return result
 
     def get_all(self, offset: int = 0, limit: int = 20) -> ProductoList:
-        """Devuelve el listado de productos con paginación incluyendo el total."""
+        """
+        Obtiene lista paginada de productos.
+
+        Args:
+            offset (int): Desplazamiento.
+            limit (int): Límite de resultados.
+
+        Returns:
+            ProductoList: DTO con lista de productos y total.
+
+        Nota:
+            El total se calcula con una query separada.
+        """
         with ProductoUnitOfWork(self._session) as uow:
             productos = uow.productos.get_all(offset=offset, limit=limit)
             total = uow.productos.count()
-            
+
             result = ProductoList(
                 data=[ProductoPublic.model_validate(p) for p in productos],
                 total=total,
             )
+
         return result
 
     def get_by_id(self, producto_id: int) -> ProductoPublic:
-        """Recupera un solo producto y lo devuelve."""
+        """
+        Obtiene un producto por ID.
+
+        Args:
+            producto_id (int): ID del producto.
+
+        Returns:
+            ProductoPublic: DTO del producto.
+
+        Raises:
+            HTTPException: 404 si no existe.
+        """
         with ProductoUnitOfWork(self._session) as uow:
             producto = self._get_or_404(uow, producto_id)
             result = ProductoPublic.model_validate(producto)
-            
+
         return result

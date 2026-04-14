@@ -11,13 +11,13 @@ from sqlmodel import SQLModel, Field
 # ── Entrada ───────────────────────────────────────────────────────────────────
 
 class ProductoCreate(SQLModel):
-    """Body para POST /productos/"""
+    """Body para POST /products/"""
     name: str = Field(min_length=2, max_length=100)
     price: float = Field(ge=0.0)
 
 
 class ProductoUpdate(SQLModel):
-    """Body para PATCH /productos/{id} — todos los campos opcionales."""
+    """Body para PATCH /products/{id} — todos los campos opcionales."""
     name: Optional[str] = Field(default=None, min_length=2, max_length=100)
     price: Optional[float] = Field(default=None, ge=0.0)
 
@@ -32,6 +32,6 @@ class ProductoPublic(SQLModel):
 
 
 class ProductoList(SQLModel):
-    """Response model paginado para GET /productos/"""
+    """Response model paginado para GET /products/"""
     data: List[ProductoPublic]
     total: int

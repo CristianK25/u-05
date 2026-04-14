@@ -7,15 +7,23 @@ from app.modules.producto.models import Producto
 class ProductoRepository(BaseRepository[Producto]):
     """
     Repositorio de Productos.
-    Hereda todo el CRUD básico (get_by_id, get_all, add, delete) del BaseRepository.
-    Solo agrega operaciones muy puntuales de este dominio.
+    Agrega queries específicas del dominio sobre el CRUD base.
+    Solo habla con la DB — nunca levanta HTTPException.
     """
     def __init__(self, session: Session) -> None:
+        """
+        Inicializa el repositorio de Producto.
+
+        Args:
+            session (Session): Sesión activa de base de datos.
+        """
         super().__init__(session, Producto)
 
     def count(self) -> int:
         """
-        Cuenta la cantidad total de productos. 
-        Esto es vital para poder devolver el "total" en la paginación (GET /productos).
+        Cuenta la cantidad total de productos.
+
+        Returns:
+            int: Total de registros en la tabla Producto.
         """
         return len(self.session.exec(select(Producto)).all())

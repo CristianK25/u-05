@@ -1,22 +1,50 @@
-# app/modules/orden/unit_of_work.py
 from sqlmodel import Session
 from app.core.unit_of_work import UnitOfWork
 from app.modules.orden.repository import OrdenRepository, OrdenItemRepository
 from app.modules.producto.repository import ProductoRepository
 
+
 class OrdenUnitOfWork(UnitOfWork):
     """
     UoW específico del módulo orden.
-    Este es el más importante. Expone tres repositorios que van a compartir 
-    la misma ventana de transacción (misma Session de la Base de Datos).
+    Expone los repositorios que el servicio necesita coordinar.
+
+    Al entrar al contexto (with uow:) todos los repositorios
+    comparten la misma Session → misma transacción.
     """
 
     def __init__(self, session: Session) -> None:
+        """
+        UnitOfWork específico del dominio Orden.
+
+        Extiende el UnitOfWork base y registra los repositorios necesarios
+        para operar dentro de una misma transacción consistente.
+
+        Repositorios expuestos:
+            - ordenes: acceso a operaciones sobre Orden
+            - orden_items: acceso a operaciones sobre OrdenItem
+            - productos: acceso a operaciones sobre Producto (usado para
+                         validaciones de integridad y obtención de precios
+                         antes de persistir ítems de orden)
+
+        Args:
+            session (Session): Sesión activa de base de datos compartida
+                               por todos los repositorios.
+
+        Responsabilidad:
+            - Garantizar que todas las operaciones (Orden, OrdenItem, Producto)
+              se ejecuten dentro de la misma transacción
+            - Centralizar commit() y rollback() (heredado del UoW base)
+            - Coordinar múltiples repositorios bajo una única unidad de trabajo
+
+        Uso típico:
+
+            with OrdenUnitOfWork(session) as uow:
+                producto = uow.productos.get_by_id(product_id)
+                orden = Orden(...)
+                uow.ordenes.add(orden)
+        """
         super().__init__(session)
         self.ordenes = OrdenRepository(session)
         self.orden_items = OrdenItemRepository(session)
-        
-        # IMPORTANTE: Metemos el repositorio de Productos acá adentro (Operación Cross-Module)
-        # Al armar la OrdenItem necesitamos validar que el Producto exista
-        # y agarrar su precio verdadero directamente desde la base de datos (y capaz restar stock si hubiera).
         self.productos = ProductoRepository(session)

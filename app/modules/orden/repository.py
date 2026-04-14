@@ -7,23 +7,38 @@ from app.modules.orden.models import Orden, OrdenItem
 class OrdenRepository(BaseRepository[Orden]):
     """
     Repositorio de Órdenes.
-    Maneja exclusivamente las consultas a la tabla "ordenes".
+    Agrega queries específicas del dominio sobre el CRUD base.
+    Solo habla con la DB — nunca levanta HTTPException.
     """
     def __init__(self, session: Session) -> None:
-        # Le pasamos explícitamente el modelo Orden al BaseRepository
+        """
+        Inicializa el repositorio de Orden.
+
+        Args:
+            session (Session): Sesión activa de base de datos.
+        """
         super().__init__(session, Orden)
 
     def count(self) -> int:
-        """Cuenta la cantidad total de órdenes para la paginación."""
+        """
+        Cuenta la cantidad total de órdenes.
+
+        Returns:
+            int: Total de registros en la tabla Orden.
+        """
         return len(self.session.exec(select(Orden)).all())
 
 
 class OrdenItemRepository(BaseRepository[OrdenItem]):
     """
     Repositorio de OrdenItems (tabla intermedia).
-    Es un repositorio de apoyo que usará el UnitOfWork de la Orden
-    para ir conectando los productos comprados con su orden correspondiente.
+    Solo habla con la DB — nunca levanta HTTPException.
     """
     def __init__(self, session: Session) -> None:
-        # Le pasamos el modelo OrdenItem
+        """
+        Inicializa el repositorio de OrdenItem.
+
+        Args:
+            session (Session): Sesión activa de base de datos.
+        """
         super().__init__(session, OrdenItem)

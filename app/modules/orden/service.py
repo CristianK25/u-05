@@ -14,15 +14,54 @@ from app.modules.orden.unit_of_work import OrdenUnitOfWork
 
 class OrdenService:
     """
-    Capa de lógica de negocio para Orden.
-    Acá ocurre la magia del cálculo del total y validación con los productos.
+    Servicio de aplicación para la entidad Orden.
+
+    Responsabilidades:
+    - Orquestar casos de uso relacionados a órdenes
+    - Coordinar múltiples repositorios mediante UnitOfWork
+    - Validar reglas de negocio a nivel aplicación
+    - Levantar HTTPException cuando corresponde
+    - NUNCA acceder directamente a la Session
+
+    Características:
+    - Soporta operaciones cross-module (Orden + Producto)
+    - Mantiene consistencia transaccional usando OrdenUnitOfWork
+
+    REGLA IMPORTANTE — objetos ORM y commit():
+    Después de que el UoW hace commit(), SQLAlchemy expira los atributos
+    del objeto ORM. Toda serialización (model_dump / model_validate)
+    debe ocurrir DENTRO del bloque `with uow:`, antes de que __exit__
+    dispare el commit.
     """
 
     def __init__(self, session: Session) -> None:
+        """
+        Inicializa el servicio con una sesión de base de datos.
+
+        Args:
+            session (Session): Sesión activa que será utilizada por el UnitOfWork.
+
+        Nota:
+            El servicio no maneja directamente la transacción; delega en OrdenUnitOfWork.
+        """
         self._session = session
 
+    # ── Helpers privados ──────────────────────────────────────────────────────
+
     def _get_or_404(self, uow: OrdenUnitOfWork, orden_id: int) -> Orden:
-        """Helper para buscar una orden o dar 404"""
+        """
+        Obtiene una orden por ID o lanza excepción HTTP 404 si no existe.
+
+        Args:
+            uow (OrdenUnitOfWork): Unidad de trabajo activa.
+            orden_id (int): ID de la orden.
+
+        Returns:
+            Orden: Instancia encontrada.
+
+        Raises:
+            HTTPException: 404 si la orden no existe.
+        """
         orden = uow.ordenes.get_by_id(orden_id)
         if not orden:
             raise HTTPException(
@@ -31,83 +70,104 @@ class OrdenService:
             )
         return orden
 
+    # ── Casos de uso ─────────────────────────────────────────────────────────
+
     def create(self, data: OrdenCreate) -> OrdenPublic:
         """
-        Crea una orden completa.
-        Flujo de Negocio:
-          1. Verifica que los productos enviados existan.
-          2. Trae el precio actual del producto y lo "congela" en la orden.
-          3. Calcula los subtotales y el TOTAL general de la orden.
-          4. Guarda todo (Orden y OrdenItems) en una única transacción.
+        Crea una orden completa con sus ítems.
+
+        Flujo:
+        - Itera los ítems recibidos
+        - Valida existencia del producto (cross-module)
+        - Congela el precio actual del producto en el ítem
+        - Calcula subtotales y total general
+        - Persiste Orden + OrdenItems en una única transacción
+
+        Args:
+            data (OrdenCreate): Datos de entrada con email e ítems.
+
+        Returns:
+            OrdenPublic: DTO de la orden creada.
+
+        Raises:
+            HTTPException: 404 si algún producto no existe.
         """
         with OrdenUnitOfWork(self._session) as uow:
             nueva_orden = Orden(user_email=data.user_email, total_amount=0.0)
-            
-            # Lista donde iremos acumulando los ítems listos para guardar en BD
+
             lista_items = []
             monto_total = 0.0
-            
-            # Recorremos lo que mandó el cliente
+
             for item_in in data.items:
-                # ¡Magia Cross-Module! El UoW de órdenes llama al Repositorio de Productos
                 producto_db = uow.productos.get_by_id(item_in.product_id)
-                
-                # Si algún graciosillo pasa un ID que no existe, todo se suspende.
+
                 if not producto_db:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
-                        detail="Producto no encontrado", # Tal cual te lo exigía el JSON
+                        detail="Producto no encontrado",
                     )
-                
-                # Armamos el ítem sellando el precio de "HOY"
+
                 nuevo_item = OrdenItem(
                     product_id=producto_db.id,
                     quantity=item_in.quantity,
                     unit_price=producto_db.price,
                 )
-                
-                # Incrementamos la cuenta total
-                monto_total += (producto_db.price * item_in.quantity)
-                
+
+                monto_total += producto_db.price * item_in.quantity
                 lista_items.append(nuevo_item)
-            
-            # Le asignamos la lista y el precio calculado a nuestro objeto final de Base de Datos
+
             nueva_orden.items = lista_items
             nueva_orden.total_amount = monto_total
-            
-            # Mandamos todo al Repositorio de Órdenes
+
             uow.ordenes.add(nueva_orden)
-            
-            # Serializamos la salida al DTO BÁSICO (el que mostrás nomás se crea)
             result = OrdenPublic.model_validate(nueva_orden)
 
         return result
 
     def get_by_id(self, orden_id: int) -> OrdenReadWithItems:
         """
-        Devuelve el detalle gigante (ANIDADO) de una orden y sus ítems completos.
-        Aprovecha la funcionalidad SQLModel de obtener data en el contexto de UOW ("Lazy Loading").
+        Obtiene una orden por ID con sus ítems y productos anidados.
+
+        Caso cross-module:
+        - Consulta Orden
+        - Accede a OrdenItems y Productos relacionados via lazy loading
+
+        Args:
+            orden_id (int): ID de la orden.
+
+        Returns:
+            OrdenReadWithItems: DTO con datos embebidos.
+
+        Raises:
+            HTTPException: 404 si no existe.
         """
         with OrdenUnitOfWork(self._session) as uow:
             orden = self._get_or_404(uow, orden_id)
-            
-            # Renderizamos la orden DENTRO de base model para forzar la inyección
-            # de los productos anidados (ya que el Schema "OrdenReadWithItems" exige objetos "Producto")
             result = OrdenReadWithItems.model_validate(orden)
-            
+
         return result
 
     def get_all(self, offset: int = 0, limit: int = 20) -> OrdenList:
         """
-        Devuelve la lista paginada de Órdenes con ítems.
+        Obtiene lista paginada de órdenes con ítems y productos.
+
+        Args:
+            offset (int): Desplazamiento.
+            limit (int): Límite de resultados.
+
+        Returns:
+            OrdenList: DTO con lista de órdenes y total.
+
+        Nota:
+            El total se calcula con una query separada.
         """
         with OrdenUnitOfWork(self._session) as uow:
             ordenes = uow.ordenes.get_all(offset=offset, limit=limit)
             total = uow.ordenes.count()
-            
-            # Validamos con OrdenReadWithItems para que el JSON se despliegue masivo y anidado
+
             result = OrdenList(
                 data=[OrdenReadWithItems.model_validate(o) for o in ordenes],
                 total=total,
             )
+
         return result
